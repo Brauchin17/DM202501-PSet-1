@@ -2,15 +2,45 @@
 
 Este proyecto se encarga de la integración de datos entre QuickBooks y nuestro sistema. El propósito es extraer y procesar datos de varias entidades de QuickBooks como **Invoice**, **Customer**, **Item**, entre otras, para almacenarlos y analizarlos en nuestro sistema.
 
-# Proyecto de Integración con QuickBooks
-
-Este proyecto se encarga de la integración de datos entre QuickBooks y nuestro sistema. El propósito es extraer y procesar datos de varias entidades de QuickBooks como **Invoice**, **Customer**, **Item**, entre otras, para almacenarlos y analizarlos en nuestro sistema.
-
 ## Diagrama de Arquitectura
 
-![Diagrama de Arquitectura](./path_to_architecture_diagram.png)
+La arquitectura del sistema está basada en contenedores Docker, que encapsulan diferentes servicios que interactúan entre sí. A continuación se describe cada componente y su función en el sistema:
+### Base de datos (PostgreSQL)
+- Servicio: warehouse
+- Imagen: postgres:13
+- Función: Almacena los datos extraídos de QuickBooks, como los detalles de las Invoice, Customer, e Item.
+- Volumenes: Se monta un volumen en el contenedor para garantizar la persistencia de los datos.
+- Puertos: El puerto 5432 se expone para que los servicios puedan acceder a la base de datos.
 
-La arquitectura está basada en contenedores que gestionan la extracción de datos de QuickBooks, su transformación y almacenamiento en nuestro sistema. Los datos extraídos son procesados, validados y almacenados para su posterior análisis.
+### Interfaz de Usuario para Base de Datos (pgAdmin):
+- Servicio: warehouseui
+- Imagen: dpage/pgadmin4
+- Función: Proporciona una interfaz gráfica para gestionar la base de datos PostgreSQL y visualizar los datos almacenados.
+- Volumenes: Se monta un volumen para la persistencia de los datos de pgAdmin.
+- Puertos: El puerto 8080 se expone para acceder a la interfaz de pgAdmin.
+
+### Orquestador (MageAI)
+- Servicio: scheduler
+- Imagen: mageai/mageai
+- Función: MageAI es una plataforma que se utiliza para orquestar las tareas de integración de datos. En este caso, se encarga de ejecutar los pipelines que extraen datos de QuickBooks y los cargan en la base de datos.
+- Volumenes: Se monta un volumen para la persistencia de los datos y configuración del orquestador.
+- Puertos: El puerto 6789 se expone para acceder a la interfaz de MageAI y controlar el estado de las tareas programadas.
+- Comando de inicio: El contenedor se inicializa con el comando /app/run_app.sh mage start scheduler, que lanza el scheduler de MageAI.
+
+### Interacción entre los servicios
+- QuickBooks: El sistema extrae datos de diferentes entidades desde QuickBooks a través de la API de QuickBooks.
+- MageAI: MageAI se encarga de orquestar el proceso de extracción y transformación de los datos desde QuickBooks. Los pipelines definidos en MageAI son responsables de la segmentación de datos, gestión de errores y la persistencia de los datos procesados.
+- Base de Datos PostgreSQL: Una vez que MageAI ha procesado los datos, estos se almacenan en una base de datos PostgreSQL. Esta base de datos es utilizada para almacenar todos los datos de QuickBooks.
+- pgAdmin: pgAdmin proporciona una interfaz gráfica para que se pueda visualizar, consultar y gestionar los datos almacenados en la base de datos PostgreSQL.
+
+### Flujo de Datos
+1. Extracción de Datos: Los pipelines de MageAI se ejecutan y extraen datos desde la API de QuickBooks.
+2. Transformación: Los datos extraídos son procesados, se les agrega las columnas de Metadata
+3. Carga: Los datos transformados son cargados en la base de datos PostgreSQL, donde se almacenan de manera estructurada.
+4. Visualización: Se utilizar pgAdmin para acceder a los datos almacenados y realizar consultas.
+
+<img width="649" height="693" alt="image" src="https://github.com/user-attachments/assets/2ea0d4c6-eb80-461d-909c-6026beda5aab" />
+
 
 ## Pasos para levantar contenedores y configurar el proyecto
 
