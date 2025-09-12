@@ -1,0 +1,48 @@
+from mage_ai.settings.repo import get_repo_path
+from mage_ai.io.config import ConfigFileLoader
+from mage_ai.io.postgres import Postgres
+from pandas import DataFrame
+from os import path
+
+if 'data_exporter' not in globals():
+    from mage_ai.data_preparation.decorators import data_exporter
+
+
+@data_exporter
+def export_data_to_postgres(df: DataFrame, **kwargs) -> None:
+    """
+    Template for exporting data to a PostgreSQL database.
+    Specify your configuration settings in 'io_config.yaml'.
+
+    Docs: https://docs.mage.ai/design/data-loading#postgresql
+    """
+    schema_name = 'raw'  # Specify the name of the schema to export data to
+    table_name = 'invoices'  # Specify the name of the table to export data to
+    config_path = path.join(get_repo_path(), 'io_config.yaml')
+    config_profile = 'default'
+    
+    # Convertir cada fila en JSON payload completo
+    # Incluye payload + metadatos ya generados en el ingest
+    df_to_export = df.copy()
+    # Guardamos la fila completa en una columna JSONB llamada 'payload'
+    df_to_export['payload'] = df_to_export.apply(lambda row: json.dumps(row.to_dict()), axis=1)
+    export_columns = ['batch_id', 'ingested_at_utc', 'extract_window_start_utc', 'extract_window_end_utc', 'page_number', 'request_payload', 'payload']
+    df_to_export = df_to_export[export_columns]
+
+    if df.empty:
+        print('Dataframe vacio')
+        return None
+
+    #Metadatos
+
+
+
+    with Postgres.with_config(ConfigFileLoader(config_path, config_profile)) as loader:
+        loader.export(
+            df_to_export,
+            schema_name,
+            table_name,
+            index=False,  # Specifies whether to include index in exported table
+            if_exists='replace',  # Specify resolution policy if table name already exists
+        )
+    print("Data exportada")

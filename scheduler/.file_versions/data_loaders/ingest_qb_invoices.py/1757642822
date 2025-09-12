@@ -1,0 +1,160 @@
+import requests
+import base64
+import pandas
+import time
+from datetime import datetime, timedelta, timezone
+
+
+if 'data_loader' not in globals():
+    from mage_ai.data_preparation.decorators import data_loader
+if 'test' not in globals():
+    from mage_ai.data_preparation.decorators import test
+from mage_ai.data_preparation.shared.secrets import get_secret_value
+
+def _get_access_token():
+    refresh_token = get_secret_value('qb_refresh_token')
+    client_secret = get_secret_value('qb_client_secret')
+    client_id = get_secret_value('qb_client_id')
+    url = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer'
+    auth_header = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+    headers = {
+    "Accept": "application/json",
+    "Authorization": f"Basic {auth_header}",
+    "Content-Type": "application/x-www-form-urlencoded"
+    }
+    data = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token
+    }
+    response = requests.post(url, headers=headers, data=data)
+    if response.status_code == 200:
+        tokens = response.json()
+        print(f"New token")
+        return tokens["access_token"]
+    else:
+        print("Error:", response.json())
+
+# Funcion anonima para que no aparezca
+def _fetch_qb_data(realm_id,access_token, query, base_url, minor_version):
+    if not base_url or not minor_version:
+        raise ValueError("Se requiere una URL base y el minor version")
+
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Accept': 'application/json',
+        'Content-Type': 'text/plain'
+    }
+
+    params = {
+        'query': query,
+        'minorversion': minor_version
+    }
+
+    url = f"{base_url.rstrip('/')}/v3/company/{realm_id}/query"
+    max_retries = 5
+    for i in range(max_retries):
+        try:
+            #print(f'Request a la API: {base_url} \n {headers} \n {params}')
+            print(f'Request a la API, intento {i+1}')
+            response = requests.get(url, headers=headers, params=params, timeout=60**(i+1))
+            response.raise_for_status()
+            data = response.json()
+            print('Datos recibidos de la API correctamente')
+            return data
+        except requests.exceptions.RequestException as e:
+            print(f'Error en la pull de la API: {e}')
+            print(f"Reintentando, intento {i + 2}...")
+    raise Exception(f"No se pudo obtener la data después de {max_retries} reintentos.")
+    
+
+
+
+
+
+@data_loader
+def load_data(*args, **kwargs):
+    """
+    Template code for loading data from any source.
+
+    Returns:
+        Anything (e.g. data frame, dictionary, array, int, str, etc.)
+    """
+    # Poner fechas de inicio y fin
+    fecha_inicio = kwargs['fecha_inicio']
+    fecha_fin = kwargs['fecha_fin']
+
+    # Convertir strings a datetime
+    start_date = datetime.fromisoformat(fecha_inicio)
+    end_date = datetime.fromisoformat(fecha_fin)
+
+    
+    realm_id = get_secret_value('qb_realm_id')
+    access_token = _get_access_token()
+    minor_version = 75
+    # query = 'select * from Invoice'
+    base_url = 'https://sandbox-quickbooks.api.intuit.com'
+    all_invoices = []
+    current_start = start_date
+    while current_start <= end_date:
+        # Se quita 1 segundo para que no se pase al otro dia
+        current_end = min(current_start + timedelta(days=1) - timedelta(seconds=1), end_date)  # tramo diario
+        print(f"Procesando: {current_start.date()} a {current_end.date()}")
+        start_time = time.time()
+        pages_read = 0
+        rows_act = 0
+        page_size = 100 # Detener cuando este incompleto
+        start_pos = 1
+        while True:
+            try:
+                utc_start = datetime.now(timezone.utc)
+                query = (f"select * from Invoice where TxnDate >= '{current_start.date()}' "
+                        f"and TxnDate <= '{current_end.date()}' "
+                        f"startposition {start_pos} maxresults {page_size}")
+                utc_end = datetime.now(timezone.utc)
+                response = _fetch_qb_data(realm_id, access_token, query, base_url, minor_version)
+                invoices_page = response.get('QueryResponse', {}).get('Invoice', [])
+                if not invoices_page:
+                    print(f"No se encontraron datos en el dia {current_start}")
+                    break
+                print(f"Procesando pagina {pages_read+1}, con {len(invoices_page)} datos")
+
+                pages_read += 1
+                rows_act += len(invoices_page)            
+                # METADATOS
+                for invoice in invoices_page:
+                    all_invoices.append({
+                        'id': invoice['Id'],
+                        'payload': invoice,
+                        'ingested_at_utc': datetime.utcnow(),
+                        'extract_window_start_utc': utc_start,
+                        'extract_window_end_utc': utc_end,
+                        'page_number': len(invoices_page),
+                        'request_payload': query
+                    })
+                
+                if len(invoices_page) < page_size:
+                    break  # última página del tramo
+                start_position += page_size
+            except Exception as e:
+                print(f"Error al procesar la página {start_position} del dia {current_start}: {e}")
+        duration = time.time() - start_time
+        # print logs
+        print(f'Finalizado: {rows_act} filas en {round(duration, 2)}s, {pages_read} páginas')
+        current_start += timedelta(days=1)  # siguiente tramo diario
+
+    df = pandas.DataFrame(all_invoices)
+    if all_invoices:
+        print(f"Total filas cargadas: {len(df)}")
+        return df
+    else:
+        print("No se encontraron invoices en el rango indicado.")
+        return pandas.DataFrame()
+
+    
+
+@test
+def test_output(output, *args) -> None:
+    """
+    Template code for testing the output of the block.
+    """
+    assert output is not None, 'The output is undefined'
